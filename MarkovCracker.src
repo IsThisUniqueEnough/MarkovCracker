@@ -1,0 +1,330 @@
+// MIT License
+// Copyright (c) 2025 Joshua Fraustro
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+//
+// Chainsaw courtesy Joshua Fraustro!! - https://github.com/jwfraustro/chainsaw
+//
+
+
+
+// MarkovCrack is just a simplified Chainsaw. I encapsulated it for use with my own
+// tools, and I included a menu module and my universal RCE module at the bottom
+
+MarkovCrack = {}
+
+// Set this to whatever your local samples file is. I assume its just a simple text file
+// with 1 password per line, you'll have to customize MarkovCrack.load_keywords if otherwise
+MarkovCrack.sampleFile = home_dir + "/samples"
+
+//Probably shouldn't touch these
+MarkovCrack.keywords = []
+MarkovCrack.chains = {}
+if get_custom_object.hasIndex("mySamples") then MarkovCrack.keywords = get_custom_object.mySamples
+if get_custom_object.hasIndex("myChains") then MarkovCrack.chains = get_custom_object.myChains
+MarkovCrack.attempts = 0
+MarkovCrack.order = 3
+MarkovCrack.min_length = 3
+MarkovCrack.max_length = 9
+MarkovCrack.trigram_frequencies = null
+MarkovCrack.user = "root"
+MarkovCrack.ip = null
+MarkovCrack.port = null
+
+// Execution helper functions:
+
+MarkovCrack.init = function()
+	if self.chains != {} and self.keywords != []  then return "Already loaded!"
+	self.load_keywords
+	self.build_chain
+	self.sort_chains_by_frequency
+	get_custom_object.MCrack = MarkovCrack
+end function
+
+
+MarkovCrack.load_keywords = function()
+	if self.keywords != [] then return 
+	myFile = get_shell.host_computer.File(self.sampleFile)
+	if myFile == null then return "MarkovCracker.load_keywords: Could not load sameple file"
+	builder = myFile.get_content.upper
+	builder = builder.split(char(10))
+	for each in builder
+		each = each.trim()
+		if each.len >= (self.order + 1) then
+			self.keywords.push(each.upper)
+		end if
+	end for
+	get_custom_object.mySamples = self.keywords
+	print("<color=orange>[MarkovCrack]</color> loaded " +len(self.keywords) + " keywords")
+end function
+
+
+MarkovCrack.connect = function(password) 
+	if self.ip != "" and self.port != null then
+		service = "ssh"
+		if self.port == 21 then service = "ftp"
+		return get_shell.connect_service(
+			self.ip,
+			self.port,
+			self.user,
+			password,
+			service)
+	else
+		return get_shell(self.user, password)
+	end if
+
+	return null
+end function
+
+
+MarkovCrack.crack = function()
+	for i in range(0, len(self.chains.indexes) - 1)
+		token = self.chains.indexes[i]
+		result = self.recurse(token, self.max_length)
+		if result != null then
+			return result
+		end if
+	end for
+	print("Password not found after " + self.attempts + " attempts.")
+	return 1
+end function
+
+
+MarkovCrack.build_chain = function()
+	for word in self.keywords
+		for i in range(0, len(word) - self.order - 1)
+			sub_text = word[i : i + self.order]
+			if not self.chains.hasIndex(sub_text) then
+				self.chains[sub_text] = []
+			end if
+			next_char = word[i + self.order]
+			if self.chains[sub_text].indexOf(next_char) == null then
+				self.chains[sub_text].push(next_char)
+			end if
+		end for
+	end for
+	get_custom_object.myChains = self.chains
+	print("<color=orange>[MarkovCrack] </color>" + len(MarkovCrack.chains) + " keywords built.")
+end function
+MarkovCrack.sort_chains_by_frequency = function()
+    if self.trigram_frequencies == null then
+        self.calculate_trigram_frequencies
+    end if
+    sortable = []
+    for trigram in self.chains.indexes
+        freq = 0
+        if self.trigram_frequencies.hasIndex(trigram) then
+            freq = self.trigram_frequencies[trigram]
+        end if
+        sortable.push({"trigram": trigram, "frequency": freq})
+    end for
+    sortable = self.sort_by_frequency(sortable)
+    sorted_indexes = []
+    for item in sortable
+        sorted_indexes.push(item.trigram)
+    end for
+    self.chains.indexes = sorted_indexes
+end function
+MarkovCrack.calculate_trigram_frequencies = function()
+    frequencies = {}
+    for sample in self.keywords
+        for i in range(0, len(sample) - self.order - 1)
+            trigram = sample[i : i + self.order]
+
+            if not frequencies.hasIndex(trigram) then
+                frequencies[trigram] = 0
+            end if
+
+            frequencies[trigram] = frequencies[trigram] + 1
+        end for
+    end for
+    self.trigram_frequencies = frequencies
+end function
+MarkovCrack.sort_by_frequency = function(arr)
+    n = len(arr)
+    for i in range(0, n - 2)
+        for j in range(0, n - i - 2)
+            if arr[j].frequency < arr[j + 1].frequency then
+                temp = arr[j]
+                arr[j] = arr[j + 1]
+                arr[j + 1] = temp
+            end if
+        end for
+    end for
+    return arr
+end function
+MarkovCrack.recurse = function(token, max_length)
+	password = token.lower
+	result = self.connect(password)
+	self.attempts = self.attempts + 1
+	if result != null then
+		print("<color=green>- Password: <b>" + password )
+		return result
+	else
+		upper_first_char = password[0].upper + password[1:]
+		result = self.connect(upper_first_char)
+		self.attempts = self.attempts + 1
+		if result != null then
+			print("<color=green>- Password: <b>" + upper_first_char)
+			return result
+		end if
+	end if
+	if len(token) >= max_length then
+		return null
+	end if
+	start_idx = len(token) - self.order
+	sub_text = token[start_idx : start_idx + self.order]
+	if not self.chains.hasIndex(sub_text) then
+		return null
+	end if
+	next_chars = self.chains[sub_text]
+	for next_char in next_chars
+		new_password = token + next_char
+		result = self.recurse(new_password, max_length)
+		if result != null then
+			return result
+		end if
+	end for
+	return null
+end function
+
+
+// ==========================================
+// Universal RCE Module
+// ==========================================
+UniversalRCE = function( targetShell, toolObject = "MCrack", controllerMethod = "menu")
+    if typeof(targetShell) != "shell" then return print("RCE Error: Invalid shell provided.")
+    
+    // Link object to memory
+    get_custom_object.rce_payload = toolObject
+    remoteComp = targetShell.host_computer
+    
+    targetDir = ""
+    scanQueue = [remoteComp.File("/")]
+
+    // Breadth-First Search for an rwx directory
+    while scanQueue.len > 0
+        currentDir = scanQueue.pull
+        if currentDir and currentDir.has_permission("rwx") then 
+            targetDir = currentDir.path
+            break
+        end if
+        if currentDir then scanQueue = scanQueue + currentDir.get_folders
+    end while
+
+    if targetDir == "" then return print("RCE Error: No rwx directory found on target.")
+
+    // Drop payload, compile, and execute
+    payloadName = ".sys_cache"
+    payloadPath = targetDir + "/" + payloadName
+    
+    remoteComp.touch(targetDir, payloadName)
+    payloadFile = remoteComp.File(payloadPath)
+    
+    if not payloadFile then return print("RCE Error: Filesystem locked or unwritable.")
+    
+    stubCode = "payload = get_custom_object.rce_payload; if payload != null then payload." + controllerMethod + "()"
+    payloadFile.set_content(stubCode)
+    
+    buildError = targetShell.build(payloadPath, targetDir)
+    if buildError then return print("RCE Build Error: " + buildError)
+
+    print("<color=#42DB91>[Universal RCE]</color> Executing payload at " + payloadPath)
+    targetShell.launch(payloadPath)
+
+    // Clean up the resulting binary
+    compiledBinary = remoteComp.File(payloadPath)
+    if compiledBinary then compiledBinary.delete
+end function
+
+
+// ==========================================
+// Menu Controller
+// ==========================================
+MarkovCrack.menu = function()
+    while true
+		initStatus = "<color=red>1. Initialize / Load Chains"
+		if get_custom_object.hasIndex("mySamples") then initStatus = "<color=green>1. Initialized! (Re-Init?)"
+        
+		print(char(10) * 10)
+        print(initStatus)
+        print("2. Set Target User (Current: " + self.user + ")")
+        print("3. Set Target IP/Port (Current: " + self.ip + ":" + self.port + ")")
+        print("4. Change Sample File (Current: " + self.sampleFile + ")")
+        print("5. [START CRACKING]")
+        print("6. Exit")
+        
+        opt = user_input("\nSelection > ")
+        
+        if opt == "1" then
+            msg = self.init
+            if msg then print(msg)
+            user_input("Press Enter to continue...")
+            
+        else if opt == "2" then
+            self.user = user_input("Enter username to target: ")
+            
+        else if opt == "3" then
+            self.ip = user_input("Enter Target IP (leave blank for local): ")
+            p = user_input("Enter Target Port (leave blank for local): ")
+            if p == "" then self.port = null else self.port = p.to_int
+            
+        else if opt == "4" then
+            self.sampleFile = user_input("Full path to samples file: ")
+            get_custom_object.mySamples = []
+            get_custom_object.myChains = {}
+            self.keywords = []
+            self.chains = {}
+            print("Samples reset. Please Re-Initialize.")
+            user_input("Press Enter...")
+
+        else if opt == "5" then
+            if self.chains == null or self.chains.len == 0 then
+                print("Error: You must Initialize (1) before cracking.")
+            else
+                print("Starting crack attempt on " + self.user + "...")
+                self.attempts = 0 // Reset attempts counter
+                result = self.crack
+                
+                if typeof(result) == "shell" then
+                    print("<color=green>Success! Shell obtained.</color>")
+                    if self.ip != "" then
+						confirm = user_input("Deploy MarkovCrack to remote host? (y/n): ")
+						if confirm.lower == "y" then
+							UniversalRCE(self, result, "menu")
+							return 
+						end if
+					end if
+                else
+                    print("Brute force failed or returned invalid object.")
+                end if
+            end if
+            user_input("Press Enter to return to menu...")
+            
+        else if opt == "6" then
+            break
+        end if
+    end while
+end function
+
+
+
+// Entry Point
+
+MarkovCrack.menu
